@@ -699,3 +699,30 @@ async def test_partial_events_are_not_persisted(service_type, tmp_path):
       app_name=app_name, user_id=user_id, session_id=session.id
   )
   assert len(session_got.events) == 0
+
+
+@pytest.mark.asyncio
+async def test_database_session_service_commit_rollback_on_error(monkeypatch):
+  """DatabaseSessionService should rollback if commit fails."""
+  session_service = get_session_service(SessionServiceType.DATABASE)
+
+  async with session_service.database_session_factory() as sql_session:
+    rollback_called = False
+
+    async def failing_commit():
+      raise RuntimeError('commit failed')
+
+    async def recording_rollback():
+      nonlocal rollback_called
+      rollback_called = True
+
+    # Make this particular session's commit fail and ensure rollback is called.
+    monkeypatch.setattr(sql_session, 'commit', failing_commit)
+    monkeypatch.setattr(sql_session, 'rollback', recording_rollback)
+
+    # _commit_or_rollback should re-raise the commit error...
+    with pytest.raises(RuntimeError):
+      await session_service._commit_or_rollback(sql_session)
+
+    # ...and it must rollback the transaction.
+    assert rollback_called is True
